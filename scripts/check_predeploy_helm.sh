@@ -15,9 +15,14 @@
 echo "IMAGE_NAME=${IMAGE_NAME}"
 echo "IMAGE_TAG=${IMAGE_TAG}"
 echo "CHART_ROOT=${CHART_ROOT}"
+echo "CHART_NAME=${CHART_NAME}"
 echo "REGISTRY_URL=${REGISTRY_URL}"
 echo "REGISTRY_NAMESPACE=${REGISTRY_NAMESPACE}"
 echo "HELM_VERSION=${HELM_VERSION}"
+echo "KUBERNETES_SERVICE_ACCOUNT_NAME=${KUBERNETES_SERVICE_ACCOUNT_NAME}"
+
+echo "Use for custom Kubernetes cluster target:"
+echo "KUBERNETES_MASTER_ADDRESS=${KUBERNETES_MASTER_ADDRESS}"
 
 # View build properties
 if [ -f build.properties ]; then 
@@ -37,8 +42,8 @@ echo "CLUSTER_NAMESPACE=${CLUSTER_NAMESPACE}"
 echo "=========================================================="
 echo "CHECKING HELM CHART"
 if [ -z "${CHART_ROOT}" ]; then CHART_ROOT="chart" ; fi
-echo -e "Looking for chart under /${CHART_ROOT}/<CHART_NAME>"
 if [ -d ${CHART_ROOT} ]; then
+  echo -e "Looking for chart under /${CHART_ROOT}/<CHART_NAME>"
   CHART_NAME=$(find ${CHART_ROOT}/. -maxdepth 2 -type d -name '[^.]?*' -printf %f -quit)
   CHART_PATH=${CHART_ROOT}/${CHART_NAME}
 fi
@@ -54,10 +59,14 @@ helm lint ${CHART_PATH}
 #Check cluster availability
 echo "=========================================================="
 echo "CHECKING CLUSTER readiness and namespace existence"
-IP_ADDR=$( bx cs workers ${PIPELINE_KUBERNETES_CLUSTER_NAME} | grep normal | awk '{ print $2 }' )
-if [ -z "${IP_ADDR}" ]; then
-  echo -e "${PIPELINE_KUBERNETES_CLUSTER_NAME} not created or workers not ready"
-  exit 1
+if [ -z "${KUBERNETES_MASTER_ADDRESS}" ]; then
+  IP_ADDR=$( bx cs workers ${PIPELINE_KUBERNETES_CLUSTER_NAME} | grep normal | awk '{ print $2 }' )
+  if [ -z "${IP_ADDR}" ]; then
+    echo -e "${PIPELINE_KUBERNETES_CLUSTER_NAME} not created or workers not ready"
+    exit 1
+  fi
+else
+  IP_ADDR=${KUBERNETES_MASTER_ADDRESS}
 fi
 echo "Configuring cluster namespace"
 if kubectl get namespace ${CLUSTER_NAMESPACE}; then
@@ -77,7 +86,7 @@ echo -e "Checking for presence of ${IMAGE_PULL_SECRET_NAME} imagePullSecret for 
 if ! kubectl get secret ${IMAGE_PULL_SECRET_NAME} --namespace ${CLUSTER_NAMESPACE}; then
   echo -e "${IMAGE_PULL_SECRET_NAME} not found in ${CLUSTER_NAMESPACE}, creating it"
   # for Container Registry, docker username is 'token' and email does not matter
-    if [ -z "${PIPELINE_BLUEMIX_API_KEY}" ]; then PIPELINE_BLUEMIX_API_KEY=${IBM_CLOUD_API_KEY}; fi #when used outside build-in kube job
+  if [ -z "${PIPELINE_BLUEMIX_API_KEY}" ]; then PIPELINE_BLUEMIX_API_KEY=${IBM_CLOUD_API_KEY}; fi #when used outside build-in kube job
   kubectl --namespace ${CLUSTER_NAMESPACE} create secret docker-registry ${IMAGE_PULL_SECRET_NAME} --docker-server=${REGISTRY_URL} --docker-password=${PIPELINE_BLUEMIX_API_KEY} --docker-username=iamapikey --docker-email=a@b.com
 else
   echo -e "Namespace ${CLUSTER_NAMESPACE} already has an imagePullSecret for this toolchain."
@@ -88,20 +97,21 @@ if [ -z "${CHART_PULL_SECRET}" ]; then
   echo "INFO: Chart is not expecting an explicit private registry imagePullSecret. Patching the cluster default serviceAccount to pass it implicitly instead."
   echo "      Learn how to inject pull secrets into the deployment chart at: https://kubernetes.io/docs/concepts/containers/images/#referring-to-an-imagepullsecrets-on-a-pod"
   echo "      or check out this chart example: https://github.com/open-toolchain/hello-helm/tree/master/chart/hello"
-  SERVICE_ACCOUNT=$(kubectl get serviceaccount default  -o json --namespace ${CLUSTER_NAMESPACE} )
+  if [ -z "${KUBERNETES_SERVICE_ACCOUNT_NAME}" ]; then KUBERNETES_SERVICE_ACCOUNT_NAME="default" ; fi
+  SERVICE_ACCOUNT=$(kubectl get serviceaccount ${KUBERNETES_SERVICE_ACCOUNT_NAME}  -o json --namespace ${CLUSTER_NAMESPACE} )
   if ! echo ${SERVICE_ACCOUNT} | jq -e '. | has("imagePullSecrets")' > /dev/null ; then
     kubectl patch --namespace ${CLUSTER_NAMESPACE} serviceaccount/default -p '{"imagePullSecrets":[{"name":"'"${IMAGE_PULL_SECRET_NAME}"'"}]}'
   else
     if echo ${SERVICE_ACCOUNT} | jq -e '.imagePullSecrets[] | select(.name=="'"${IMAGE_PULL_SECRET_NAME}"'")' > /dev/null ; then 
-      echo -e "Pull secret already found in default serviceAccount"
+      echo -e "Pull secret already found in ${KUBERNETES_SERVICE_ACCOUNT_NAME} serviceAccount"
     else
-      echo "Inserting toolchain pull secret into default serviceAccount"
-      kubectl patch --namespace ${CLUSTER_NAMESPACE} serviceaccount/default --type='json' -p='[{"op":"add","path":"/imagePullSecrets/-","value":{"name": "'"${IMAGE_PULL_SECRET_NAME}"'"}}]'
+      echo "Inserting toolchain pull secret into ${KUBERNETES_SERVICE_ACCOUNT_NAME} serviceAccount"
+      kubectl patch --namespace ${CLUSTER_NAMESPACE} serviceaccount/${KUBERNETES_SERVICE_ACCOUNT_NAME} --type='json' -p='[{"op":"add","path":"/imagePullSecrets/-","value":{"name": "'"${IMAGE_PULL_SECRET_NAME}"'"}}]'
     fi
   fi
-  echo "default serviceAccount:"
-  kubectl get serviceaccount default --namespace ${CLUSTER_NAMESPACE} -o yaml
-  echo -e "Namespace ${CLUSTER_NAMESPACE} authorizing with private image registry using patched default serviceAccount"
+  echo "${KUBERNETES_SERVICE_ACCOUNT_NAME} serviceAccount:"
+  kubectl get serviceaccount ${KUBERNETES_SERVICE_ACCOUNT_NAME} --namespace ${CLUSTER_NAMESPACE} -o yaml
+  echo -e "Namespace ${CLUSTER_NAMESPACE} authorizing with private image registry using patched ${KUBERNETES_SERVICE_ACCOUNT_NAME} serviceAccount"  
 else
   echo -e "Namespace ${CLUSTER_NAMESPACE} authorized with private image registry using Helm chart imagePullSecret"
 fi
@@ -109,14 +119,14 @@ fi
 echo "=========================================================="
 echo "CHECKING HELM VERSION: matching Helm Tiller (server) if detected. "
 set +e
-LOCAL_VERSION=$( helm version --client | grep SemVer: | sed "s/^.*SemVer:\"v\([0-9.]*\).*/\1/" )
-TILLER_VERSION=$( helm version --server | grep SemVer: | sed "s/^.*SemVer:\"v\([0-9.]*\).*/\1/" )
+LOCAL_VERSION=$( helm version --client ${HELM_TLS_OPTION} | grep SemVer: | sed "s/^.*SemVer:\"v\([0-9.]*\).*/\1/" )
+TILLER_VERSION=$( helm version --server ${HELM_TLS_OPTION} | grep SemVer: | sed "s/^.*SemVer:\"v\([0-9.]*\).*/\1/" )
 set -e
 if [ -z "${TILLER_VERSION}" ]; then
   if [ -z "${HELM_VERSION}" ]; then
-    CLIENT_VERSION=${HELM_VERSION}
-  else
     CLIENT_VERSION=${LOCAL_VERSION}
+  else
+    CLIENT_VERSION=${HELM_VERSION}
   fi
 else
   echo -e "Helm Tiller ${TILLER_VERSION} already installed in cluster. Keeping it, and aligning client."
@@ -135,13 +145,13 @@ if [ -z "${TILLER_VERSION}" ]; then
     echo -e "Installing Helm Tiller ${CLIENT_VERSION} with cluster admin privileges (RBAC)"
     kubectl -n kube-system create serviceaccount tiller
     kubectl create clusterrolebinding tiller --clusterrole cluster-admin --serviceaccount=kube-system:tiller
-    helm init --service-account tiller
+    helm init --service-account tiller ${HELM_TILLER_TLS_OPTION}
     # helm init --upgrade --force-upgrade
     kubectl --namespace=kube-system rollout status deploy/tiller-deploy
     # kubectl rollout status -w deployment/tiller-deploy --namespace=kube-system
 fi
-helm version
+helm version ${HELM_TLS_OPTION}
 
 echo "=========================================================="
 echo -e "CHECKING HELM releases in this namespace: ${CLUSTER_NAMESPACE}"
-helm list --namespace ${CLUSTER_NAMESPACE}
+helm list ${HELM_TLS_OPTION} --namespace ${CLUSTER_NAMESPACE}

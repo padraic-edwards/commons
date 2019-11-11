@@ -23,10 +23,18 @@ if [ ! -z "${KUBERNETES_MASTER_ADDRESS}" ]; then
   kubectl config set-context custom-context --cluster=custom-cluster --user=sa-user --namespace="${CLUSTER_NAMESPACE}"
   kubectl config use-context custom-context
 fi
-kubectl cluster-info
+# Use kubectl auth to check if the kubectl client configuration is appropriate
+# check if the current configuration can create a deployment in the target namespace
+echo "Check ability to get a kubernetes deployment in ${CLUSTER_NAMESPACE} using kubectl CLI"
+kubectl auth can-i get deployment --namespace ${CLUSTER_NAMESPACE}
 
 IMAGE_REPOSITORY=${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}
-CONTAINERS_JSON=$(kubectl get deployments --namespace ${CLUSTER_NAMESPACE} -o json | jq -r ".items[].spec.template.spec.containers[]? | select(.image==\"${IMAGE_REPOSITORY}:${IMAGE_TAG}\") ")
+# Ensure that the image match the repository, image name and tag without the @ sha id part to handle
+# case when image is sha-suffixed or not - ie:
+# us.icr.io/sample/hello-containers-20190823092122682:1-master-a15bd262-20190823100927
+# or
+# us.icr.io/sample/hello-containers-20190823092122682:1-master-a15bd262-20190823100927@sha256:9b56a4cee384fa0e9939eee5c6c0d9912e52d63f44fa74d1f93f3496db773b2e
+CONTAINERS_JSON=$(kubectl get deployments --namespace ${CLUSTER_NAMESPACE} -o json | jq -r '.items[].spec.template.spec.containers[]? | select(.image | test("'"${IMAGE_REPOSITORY}:${IMAGE_TAG}"'(@.+|$)"))')
 echo $CONTAINERS_JSON | jq .
 
 LIVENESS_PROBE_PATH=$(echo $CONTAINERS_JSON | jq -r ".livenessProbe.httpGet.path" | head -n 1)
