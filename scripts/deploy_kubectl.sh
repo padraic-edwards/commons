@@ -61,6 +61,9 @@ metadata:
   name: %s
 spec:
   replicas: 1
+  selector:
+     matchLabels:
+       name: %s
   template:
     metadata:
       labels:
