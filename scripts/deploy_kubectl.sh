@@ -55,15 +55,12 @@ if [ -f ${DEPLOYMENT_FILE} ]; then
 else 
   echo "No ${DEPLOYMENT_FILE} found. Initializing it."
   deployment_content=$(cat <<'EOT'
-apiVersion: apps/v1
+apiVersion: xtensions/v1beta1
 kind: Deployment
 metadata:
   name: %s
 spec:
   replicas: 1
-  selector:
-     matchLabels:
-       name: %s
   template:
     metadata:
       labels:
