@@ -58,7 +58,7 @@ kubectl auth can-i create deployment --namespace ${CLUSTER_NAMESPACE}
 echo "=========================================================="
 echo "CHECKING CLUSTER readiness and namespace existence"
 if [ -z "${KUBERNETES_MASTER_ADDRESS}" ]; then
-  IP_ADDR=$( ibmcloud cs workers ${PIPELINE_KUBERNETES_CLUSTER_NAME} | grep normal | head -n 1 | awk '{ print $2 }' )
+  IP_ADDR=$( ibmcloud ks workers --cluster ${PIPELINE_KUBERNETES_CLUSTER_NAME} | grep normal | head -n 1 | awk '{ print $2 }' )
   if [ -z "${IP_ADDR}" ]; then
     echo -e "${PIPELINE_KUBERNETES_CLUSTER_NAME} not created or workers not ready"
     exit 1
@@ -109,12 +109,15 @@ if [ -z "${DEPLOYMENT_FILE}" ]; then DEPLOYMENT_FILE=deployment.yml ; fi
 if [ ! -f ${DEPLOYMENT_FILE} ]; then
   echo "No ${DEPLOYMENT_FILE} found. Initializing it."
   deployment_content=$(cat <<'EOT'
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: %s
 spec:
   replicas: 1
+  selector:
+    matchLabels:
+      app: %s
   template:
     metadata:
       labels:
@@ -154,7 +157,7 @@ EOT
   # Derive an application name from toolchain name ensuring it is conform to DNS-1123 subdomain
   application_name=$(echo ${IDS_PROJECT_NAME} | tr -cd '[:alnum:].-')
   printf "$deployment_content" \
-   "${application_name}" "${application_name}" "${application_name}" "${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG}" "${PORT}" \
+   "${application_name}" "${application_name}" "${application_name}" "${application_name}" "${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG}" "${PORT}" \
    "${application_name}" "${application_name}" "${PORT}" "${application_name}" | tee ${DEPLOYMENT_FILE}
 fi
 
@@ -189,7 +192,7 @@ DEPLOYMENT_NAME=$(kubectl get deploy --namespace ${CLUSTER_NAMESPACE} -o json | 
 echo -e "CHECKING deployment rollout of ${DEPLOYMENT_NAME}"
 echo ""
 set -x
-if kubectl rollout status deploy/${DEPLOYMENT_NAME} --watch=true --timeout=150s --namespace ${CLUSTER_NAMESPACE}; then
+if kubectl rollout status deploy/${DEPLOYMENT_NAME} --watch=true --timeout=${ROLLOUT_TIMEOUT:-"150s"} --namespace ${CLUSTER_NAMESPACE}; then
   STATUS="pass"
 else
   STATUS="fail"
@@ -208,7 +211,7 @@ if jq -e '.services[] | select(.service_id=="draservicebroker")' _toolchain.json
     DEPLOYMENT_ENVIRONMENT="${KUBERNETES_MASTER_ADDRESS}:${CLUSTER_NAMESPACE}"
   fi
   ibmcloud doi publishdeployrecord --env $DEPLOYMENT_ENVIRONMENT \
-    --buildnumber ${SOURCE_BUILD_NUMBER} --logicalappname ${IMAGE_NAME} --status ${STATUS}
+    --buildnumber ${SOURCE_BUILD_NUMBER} --logicalappname="${APP_NAME:-$IMAGE_NAME}" --status ${STATUS}
 fi
 if [ "$STATUS" == "fail" ]; then
   echo "DEPLOYMENT FAILED"
