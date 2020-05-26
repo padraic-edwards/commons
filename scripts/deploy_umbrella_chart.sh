@@ -123,8 +123,7 @@ echo "iDRA based version of this script is located at: https://github.com/open-t
 
   # If APP_NAME is defined then create a deployment record the umbrella chart deployment
   if [ "$APP_NAME" ]; then
-    ibmcloud doi publishdeployrecord --logicalappname="{$APP_NAME}" --buildnumber=${SOURCE_BUILD_NUMBER} --env=${LOGICAL_ENV_NAME} --status=${STATUS}
-       
+    ibmcloud doi publishdeployrecord --logicalappname="${APP_NAME}" --buildnumber=${SOURCE_BUILD_NUMBER} --env=${LOGICAL_ENV_NAME} --status=${STATUS}
   fi
 
   # Keep the current APP_NAME and SOURCE_BUILD_NUMBER to restore it after sub-component DOI deployment record
@@ -159,7 +158,7 @@ export APP_NAME=$PREVIOUS_APP_NAME
 export SOURCE_BUILD_NUMBER=$PREVIOUS_SOURCE_BUILD_NUMBER
 
 echo "=========================================================="
-IP_ADDR=$(bx cs workers ${PIPELINE_KUBERNETES_CLUSTER_NAME} | grep normal | head -n 1 | awk '{ print $2 }')
+IP_ADDR=$(ibmcloud ks workers --cluster ${PIPELINE_KUBERNETES_CLUSTER_NAME} | grep normal | head -n 1 | awk '{ print $2 }')
 
 echo -e "Deployed services:"
 kubectl get services --namespace ${CLUSTER_NAMESPACE} --selector release=${RELEASE_NAME} -o json | jq -r '.items[].spec.ports[0] | [.name, .nodePort | tostring] | join(" -> http://"+"'"${IP_ADDR}"':") '

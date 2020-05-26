@@ -61,6 +61,9 @@ metadata:
   name: %s
 spec:
   replicas: 1
+  selector:
+    matchLabels:
+      app: %s
   template:
     metadata:
       labels:
@@ -100,7 +103,7 @@ EOT
   # Derive an application name from toolchain name ensuring it is conform to DNS-1123 subdomain
   application_name=$(echo ${IDS_PROJECT_NAME} | tr -cd '[:alnum:].-')
   printf "$deployment_content" \
-   "${application_name}" "${application_name}" "${application_name}" "${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG}" "${PORT}" \
+   "${application_name}" "${application_name}" "${application_name}" "${application_name}" "${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG}" "${PORT}" \
    "${application_name}" "${application_name}" "${PORT}" "${application_name}" | tee ${DEPLOYMENT_FILE}
 fi    
 set -x
@@ -183,7 +186,7 @@ if [ ! -z "${APP_SERVICE}" ]; then
   echo ""
   echo ""
   if [ -z "${KUBERNETES_MASTER_ADDRESS}" ]; then
-    IP_ADDR=$( bx cs workers ${PIPELINE_KUBERNETES_CLUSTER_NAME} | grep normal | head -n 1 | awk '{ print $2 }' )
+    IP_ADDR=$( ibmcloud ks workers --cluster ${PIPELINE_KUBERNETES_CLUSTER_NAME} | grep normal | head -n 1 | awk '{ print $2 }' )
     if [ -z "${IP_ADDR}" ]; then
       echo -e "${PIPELINE_KUBERNETES_CLUSTER_NAME} not created or workers not ready"
       exit 1

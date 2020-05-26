@@ -1,18 +1,15 @@
 #!/bin/bash
 # uncomment to debug the script
 # set -x
-# copy the script below into your app code repo (e.g. ./scripts/build_image.sh) and 'source' it from your pipeline job
-#    source ./scripts/build_image.sh
-# alternatively, you can source it from online script:
-#    source <(curl -sSL "https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/build_image.sh")
-# ------------------
-# source: https://raw.githubusercontent.com/open-toolchain/commons/master/scripts/build_image.sh
+# This script does build a Docker image using Docker-in-Docker into IBM Container Service private image registry,
+# and copies information into a build.properties file, so they can be reused later on by other scripts
+# (e.g. image url, chart name, ...)
 
-# This script does build a Docker image into IBM Container Service private image registry.
-# Minting image tag using format: BUILD_NUMBER-BRANCH-COMMIT_ID-TIMESTAMP
-# Also copies information into a build.properties file, so they can be reused later on by other scripts (e.g. image url, chart name, ...)
+if [ -z "$REGISTRY_URL" ]; then
+  # Initialize REGISTRY_URL with the ibmcloud cr info output
+  export REGISTRY_URL=$(ibmcloud cr info | grep -i '^Container Registry' | sort | head -1 | awk '{print $3;}')
+fi
 
-# Input env variables (can be received via a pipeline environment properties.file.
 echo "REGISTRY_URL=${REGISTRY_URL}"
 echo "REGISTRY_NAMESPACE=${REGISTRY_NAMESPACE}"
 echo "IMAGE_NAME=${IMAGE_NAME}"
@@ -34,13 +31,10 @@ fi
 # or learn more about the available environment variables at:
 # https://cloud.ibm.com/docs/services/ContinuousDelivery/pipeline_deploy_var.html#deliverypipeline_environment
 
-# To review or change build options use:
-# ibmcloud cr build --help
-
 echo -e "Existing images in registry"
 ibmcloud cr images
 
-# Minting image tag using format: BUILD_NUMBER-BRANCH-COMMIT_ID-TIMESTAMP
+# Minting image tag using format: BUILD_NUMBER--BRANCH-COMMIT_ID-TIMESTAMP
 # e.g. 3-master-50da6912-20181123114435
 # (use build number as first segment to allow image tag as a patch release name according to semantic versioning)
 
@@ -56,14 +50,24 @@ echo "=========================================================="
 echo -e "BUILDING CONTAINER IMAGE: ${IMAGE_NAME}:${IMAGE_TAG}"
 if [ -z "${DOCKER_ROOT}" ]; then DOCKER_ROOT=. ; fi
 if [ -z "${DOCKER_FILE}" ]; then DOCKER_FILE=Dockerfile ; fi
-set -x
-ibmcloud cr build -f ${DOCKER_ROOT}/${DOCKER_FILE} -t ${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG} ${EXTRA_BUILD_ARGS} ${DOCKER_ROOT}
-set +x
 
-ibmcloud cr image-inspect ${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG}
+docker build --tag "$REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME:$IMAGE_TAG" -f ${DOCKER_ROOT}/${DOCKER_FILE} ${DOCKER_ROOT}
+RC=$?
+if [ "$RC" != "0" ]; then
+  exit $RC
+fi
+
+docker inspect ${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG}
 
 # Set PIPELINE_IMAGE_URL for subsequent jobs in stage (e.g. Vulnerability Advisor)
 export PIPELINE_IMAGE_URL="$REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME:$IMAGE_TAG"
+
+export DCT_DISABLED=${DCT_DISABLED:-true}
+docker push --disable-content-trust=$DCT_DISABLED "$REGISTRY_URL/$REGISTRY_NAMESPACE/$IMAGE_NAME:$IMAGE_TAG" 
+RC=$?
+if [ "$RC" != "0" ]; then
+  exit $RC
+fi
 
 ibmcloud cr images --restrict ${REGISTRY_NAMESPACE}/${IMAGE_NAME}
 
@@ -94,8 +98,8 @@ echo "IMAGE_NAME=${IMAGE_NAME}" >> $ARCHIVE_DIR/build.properties
 echo "IMAGE_TAG=${IMAGE_TAG}" >> $ARCHIVE_DIR/build.properties
 # REGISTRY information from build.properties is used in Helm Chart deployment to generate cluster secret
 echo "REGISTRY_URL=${REGISTRY_URL}" >> $ARCHIVE_DIR/build.properties
+echo "REGISTRY_REGION=${REGISTRY_REGION}" >> $ARCHIVE_DIR/build.properties
 echo "REGISTRY_NAMESPACE=${REGISTRY_NAMESPACE}" >> $ARCHIVE_DIR/build.properties
 echo "GIT_BRANCH=${GIT_BRANCH}" >> $ARCHIVE_DIR/build.properties
 echo "File 'build.properties' created for passing env variables to subsequent pipeline jobs:"
-cat $ARCHIVE_DIR/build.properties | grep -v -i password
-
+cat $ARCHIVE_DIR/build.properties
